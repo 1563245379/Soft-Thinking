@@ -116,11 +116,14 @@ bash xx.sh
 > 2. Additionally, precision issues may arise due to insufficient VRAM, which may lead to lower performance. Please try gradually decreasing `--max_running_requests` (start from 400 to 1) to keep token usage below 90% during inference or ensure no offloading occurs and the same operator (https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/). Please refer to https://github.com/eric-ai-lab/Soft-Thinking/issues/17 if you have limited GPU memory. If you would like to contribute to deterministic Soft Thinking, please feel free to contact me!!!
 
 ### ⚖️ 1. LLM Judge
-**Use your own OpenAI key in each script.**
+Judge evaluation supports Azure OpenAI, OpenAI, and OpenAI-compatible endpoints such as DeepSeek.
+
+DeepSeek example:
 ```bash
-export OPENAI_API_KEY=""
+export DEEPSEEK_API_KEY=""
 ```
-We use `gpt-4.1-2025-04-14` as the LLM judge.
+
+We use `gpt-4.1-2025-04-14` as the default LLM judge, but you can switch to `deepseek-chat`.
 
 ### 🧪 2. Baseline
 
@@ -143,7 +146,7 @@ python ./models/download.py --model_name "Qwen/QwQ-32B"
 Then, run the baseline inference:
 
 ```bash
-export OPENAI_API_KEY=""
+export DEEPSEEK_API_KEY=""
 python run_sglang_softthinking.py \
     --dataset "aime2024" \
     --model_name "./models/Qwen/QwQ-32B" \ # you can use Qwen/QwQ-32B without downloading to ./models
@@ -165,7 +168,8 @@ python run_sglang_softthinking.py \
     --num_gpus 8 \
     --num_samples 16 \
     --use_llm_judge \
-    --judge_model_name "gpt-4.1-2025-04-14" 
+    --api_base "https://api.deepseek.com" \
+    --judge_model_name "deepseek-chat"
 ```
 
 
@@ -182,7 +186,7 @@ bash scripts/st/qwq32b_st_math.sh
 Or directly execute:
 
 ```bash
-export OPENAI_API_KEY=""
+export DEEPSEEK_API_KEY=""
 python run_sglang_softthinking.py \
     --dataset "aime2024" \
     --model_name "./models/Qwen/QwQ-32B" \
@@ -205,7 +209,8 @@ python run_sglang_softthinking.py \
     --num_samples 1 \
     --enable_soft_thinking \
     --use_llm_judge \
-    --judge_model_name "gpt-4.1-2025-04-14" 
+    --api_base "https://api.deepseek.com" \
+    --judge_model_name "deepseek-chat"
 ```
 
 When running **coding benchmarks (HumanEval, MBPP, and LiveCodeBench)**, start by executing without the `--reeval` flag. Then, run it again with the `--reeval` flag for evaluation. This is due to a multiprocessing bug.

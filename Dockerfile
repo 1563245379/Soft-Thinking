@@ -53,13 +53,8 @@ RUN python -m pip install --upgrade "pip==25.1.1" "setuptools==78.1.1" "wheel==0
         "flashinfer-python==0.2.3" \
     && python -m pip install --no-cache-dir -r /tmp/requirements.st.txt
 
-# Install local editable packages
-COPY LiveCodeBench_pkg /workspace/LiveCodeBench_pkg
-RUN cd /workspace/LiveCodeBench_pkg \
-    && python -m pip install -e .
-
-COPY sglang_soft_thinking_pkg/python /workspace/sglang
-RUN cd /workspace/sglang \
+COPY sglang_soft_thinking_pkg/python /opt/soft-thinking/sglang
+RUN cd /opt/soft-thinking/sglang \
     && python -m pip install -e .
 
 CMD ["bash"]

@@ -3,7 +3,7 @@ import json
 import argparse
 import jsonlines
 from collections import defaultdict
-from openai import OpenAI
+from openai import OpenAI, AzureOpenAI
 from typing import Dict, Any
 from math_verify import parse, verify, LatexExtractionConfig, ExprExtractionConfig, StringExtractionConfig
 from latex2sympy2_extended import NormalizationConfig
@@ -39,11 +39,14 @@ Model-generated response: {solution_str}
             return body
 
         def run_api(inputs):
+            if OPENAI_CLIENT is None or not MODEL_NAME:
+                raise RuntimeError("LLM judge client is not initialized.")
             completion = OPENAI_CLIENT.chat.completions.create(
                 model=MODEL_NAME,
                 messages=inputs
             )
-            return completion.choices[0].message.content.strip()
+            content = completion.choices[0].message.content
+            return content.strip() if content else ""
         if finish_generation:
             scene_description = self.get_llm_judge_prompt(solution_str, ground_truth, extracted_answer, finish_generation)
         else:
@@ -300,24 +303,78 @@ HEADERS = None
 OPENAI_CLIENT = None
 MODEL_NAME = None
 
+
+def _normalize_api_base(api_base: str | None) -> str | None:
+    if not api_base:
+        return None
+    return api_base.rstrip("/")
+
+
+def _is_azure_client(api_base: str | None, deployment_name: str | None, api_version: str | None) -> bool:
+    return bool(api_base and deployment_name and api_version)
+
+
+def _resolve_api_key(api_key: str | None, api_base: str | None, model_name: str | None) -> str:
+    if api_key:
+        return api_key
+
+    normalized_api_base = (api_base or "").lower()
+    normalized_model_name = (model_name or "").lower()
+    prefers_deepseek = "deepseek" in normalized_api_base or normalized_model_name.startswith("deepseek")
+
+    if prefers_deepseek:
+        return os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+
+    return os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
+
 def set_client(api_base=None, deployment_name=None, api_version=None, api_key=None, model_name="gpt-4.1-2025-04-14"):
     global API_BASE, DEPLOYMENT_NAME, API_VERSION, CONSTRUCTED_URL, API_KEY, HEADERS, MODEL_NAME, OPENAI_CLIENT
 
-    API_BASE = api_base
+    API_BASE = _normalize_api_base(api_base)
     DEPLOYMENT_NAME = deployment_name
     API_VERSION = api_version
-    CONSTRUCTED_URL = f"{api_base}/openai/deployments/{deployment_name}/chat/completions?api-version={api_version}"
-    API_KEY = api_key or os.getenv("OPENAI_API_KEY", "")
+    if _is_azure_client(API_BASE, DEPLOYMENT_NAME, API_VERSION):
+        CONSTRUCTED_URL = f"{API_BASE}/openai/deployments/{DEPLOYMENT_NAME}/chat/completions?api-version={API_VERSION}"
+    else:
+        CONSTRUCTED_URL = API_BASE
+    API_KEY = _resolve_api_key(api_key, API_BASE, model_name)
     MODEL_NAME = model_name
-    HEADERS = {
-        "Content-Type": "application/json",
-        "api-key": api_key,
-    }
+
+    if _is_azure_client(API_BASE, DEPLOYMENT_NAME, API_VERSION):
+        HEADERS = {
+            "Content-Type": "application/json",
+            "api-key": API_KEY,
+        }
+    else:
+        HEADERS = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {API_KEY}",
+        }
+
     if API_KEY:
-        print(f"Using API key: {API_KEY}")
-        OPENAI_CLIENT = OpenAI(api_key=API_KEY)
+        if _is_azure_client(API_BASE, DEPLOYMENT_NAME, API_VERSION):
+            assert API_BASE is not None
+            assert API_VERSION is not None
+            assert DEPLOYMENT_NAME is not None
+            OPENAI_CLIENT = AzureOpenAI(
+                api_key=API_KEY,
+                azure_endpoint=API_BASE,
+                api_version=API_VERSION,
+                azure_deployment=DEPLOYMENT_NAME,
+            )
+        elif API_BASE:
+            OPENAI_CLIENT = OpenAI(api_key=API_KEY, base_url=API_BASE)
+        else:
+            OPENAI_CLIENT = OpenAI(api_key=API_KEY)
+        print(
+            f"Initialized judge client with model={MODEL_NAME}, "
+            f"api_base={API_BASE or 'default-openai'}, "
+            f"azure_mode={_is_azure_client(API_BASE, DEPLOYMENT_NAME, API_VERSION)}",
+            flush=True,
+        )
     else:
         OPENAI_CLIENT = None
+        print("LLM judge disabled: no API key configured.", flush=True)
     
 
 

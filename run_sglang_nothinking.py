@@ -50,10 +50,11 @@ def main():
     parser.add_argument('--output_dir', type=str, default="results", help='Directory to save results')
     parser.add_argument('--reeval', action='store_true', help='Enable re-evaluation')
     parser.add_argument('--use_llm_judge', action='store_true', help='Enable LLM judge')
-    parser.add_argument('--api_base', type=str, default=None, help='')
-    parser.add_argument('--deployment_name', type=str, default=None, help='')
-    parser.add_argument('--api_version', type=str, default=None, help='')
-    parser.add_argument('--api_key', type=str, default=None, help='')
+    parser.add_argument('--api_base', type=str, default=None, help='Judge API base URL. Supports OpenAI-compatible endpoints such as https://api.deepseek.com')
+    parser.add_argument('--deployment_name', type=str, default=None, help='Azure OpenAI deployment name when using Azure judge endpoints')
+    parser.add_argument('--api_version', type=str, default=None, help='Azure OpenAI API version when using Azure judge endpoints')
+    parser.add_argument('--api_key', type=str, default=None, help='Judge API key. Falls back to DEEPSEEK_API_KEY or OPENAI_API_KEY')
+    parser.add_argument('--judge_model_name', type=str, default='gpt-4.1-2025-04-14', help='Judge LLM model name for evaluation')
 
     parser.add_argument('--push_results_to_hf', action='store_true', help='Enable push to huggingface')
     parser.add_argument('--hf_token', type=str, default=None, help='')
@@ -102,7 +103,7 @@ def main():
 
     print(f"Arguments: {args}", flush=True)
     
-    matheval.set_client(args.api_base, args.deployment_name, args.api_version, args.api_key)
+    matheval.set_client(args.api_base, args.deployment_name, args.api_version, args.api_key, args.judge_model_name)
 
     if dataset == "math500":
         with open("./datasets/math500.json") as f:
