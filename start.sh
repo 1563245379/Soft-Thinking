@@ -10,4 +10,6 @@ cd sglang_soft_thinking_pkg
 pip install -e "python[all]"
 cd ..
 
+pip install --upgrade torchaudio
+
 python ./models/download.py --model_name "Qwen/QwQ-32B"
