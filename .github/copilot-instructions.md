@@ -20,11 +20,6 @@ A local Conda environment can be set up via the provided scripts:
 bash configure.sh
 ```
 
-Before running any Python command in this workspace, first activate the required Conda environment:
-```bash
-source /workspace/miniconda/bin/activate st
-```
-
 ### Running Inference and Evaluation
 The `scripts/` directory contains bash scripts for running baselines and the "Soft Thinking" implementations on various models (e.g., QwQ-32B). 
 - **Baseline:**

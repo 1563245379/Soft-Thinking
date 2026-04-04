@@ -198,62 +198,116 @@ Test Cases:
     results_file = f"{args.output_dir}/results/{dataset}/{base_filename}.json"
     results_statistics_file = f"{args.output_dir}/results/{dataset}/{base_filename}_statistics.json"
 
+    # Load checkpoint if results file exists (skip for reeval which re-reads its own file)
     results = []
+    completed_indices = set()
+    if os.path.exists(results_file) and not reeval:
+        try:
+            with open(results_file, "r") as f:
+                results = json.load(f)
+            completed_indices = {r["idx"] for r in results}
+            print(f"Checkpoint loaded: {len(results)} samples already completed", flush=True)
+        except (json.JSONDecodeError, KeyError):
+            print("Checkpoint file corrupted, starting fresh", flush=True)
+            results = []
+            completed_indices = set()
 
     print("begin")
     start_time = time.time()
 
-    # if reeval for code datasets, read results_file
+    # init evaluator for code datasets
+    if dataset in CODE_DATASETS:
+        mbppeval.init_evaluator()
+        humanevaleval.init_evaluator()
+
+    # if reeval for code datasets, read results_file and re-evaluate
     if reeval:
-        # read results_file
         with open(results_file, "r") as f:
-            results = json.load(f)
-        prompt_list = []
-        idx_list = list(range(start_idx, min(end_idx,len(results))))
+            prev_results = json.load(f)
+        idx_list = list(range(start_idx, min(end_idx, len(prev_results))))
         decoded_text_list = []
         finish_generation_list = []
         generated_tokens_list = []
-        for r in results:
-            prompt_list.append(r["prompt"])
+        for r in prev_results:
             decoded_text_list.extend(r["completion"])
             finish_generation_list.extend(r["finish_generation"])
             generated_tokens_list.extend(r["generated_tokens"])
         results = []
-    # if not reeval, collect prompt and idx
-    else:
-        prompt_list = []
-        idx_list = []
-        for idx in range(start_idx, min(end_idx,len(samples))):
+
+        for i, idx in enumerate(idx_list):
+            print(f"[reeval] sample {i + 1}/{len(idx_list)} (idx={idx})", flush=True)
             sample = samples[idx]
+            judge_info = []
+            passat1_list = []
+            decoded_text = decoded_text_list[i*args.num_samples:(i+1)*args.num_samples]
+            finish_generation = finish_generation_list[i*args.num_samples:(i+1)*args.num_samples]
 
-            if dataset in ["aime2024", "aime2025", "math500", "gsm8k", "amc23"]:
-                chat = [{"role": "user", "content": MATH_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
-            elif dataset == "gpqa_diamond":
-                chat = [{"role": "user", "content": GPQA_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
-            elif dataset == "humaneval":
-                chat = [{"role": "user", "content": CODE_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
-            elif dataset == "mbpp":
-                chat = [{"role": "user", "content": MBPP_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"], TestCases="\n".join(sample["final_answer"]["test_list"]))}]
-            elif dataset == "livecodebench":
-                chat = [{"role": "user", "content": get_lcb_prompt(question_content=sample["prompt"][0]["value"], starter_code=sample["final_answer"]["starter_code"])}]
-            else:
-                raise ValueError("Invalid dataset name")
+            for j in range(args.num_samples):
+                for _ in range(5):
+                    try:
+                        if dataset in MATH_DATASETS:
+                            rule_judge_result = None
+                            rule_judge_result, extracted_answer = matheval.evaluator_map[dataset].rule_judge(decoded_text[j], sample["final_answer"], finish_generation[j])
+                            llm_judge_result = None
+                            if not rule_judge_result and args.use_llm_judge:
+                                llm_judge_result = matheval.evaluator_map[dataset].llm_judge(decoded_text[j], sample["final_answer"], extracted_answer, finish_generation[j])
+                            finally_judge_result = rule_judge_result or llm_judge_result
+                            judge_info.append({
+                                "rule_judge_result": rule_judge_result,
+                                "llm_judge_result": llm_judge_result,
+                                "finally_judge_result": finally_judge_result
+                            })
+                            passat1_list.append(1.0 if finally_judge_result else 0.0)
 
-            prompt = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=False)
+                        elif dataset in CODE_DATASETS:
+                            k = 1
+                            if dataset == "humaneval":
+                                passat1, single_judge_info = humanevaleval.evaluator_map[dataset].judge(sample["prompt"][0]["value"], decoded_text[j], sample["final_answer"], k)
+                            elif dataset == "mbpp":
+                                passat1, single_judge_info = mbppeval.evaluator_map[dataset].judge(sample["prompt"][0]["value"], decoded_text[j], sample["final_answer"], k)
+                            elif dataset == "livecodebench":
+                                passat1, single_judge_info = 0.0, None
+                            passat1_list.append(passat1)
+                            judge_info.append(single_judge_info)
 
-            # Repeat prompt for num_samples times instead of using num_samples in sampling_params
-            for _ in range(args.num_samples):
-                prompt_list.append(prompt)
+                        else:
+                            raise ValueError("Unknown dataset: {}".format(dataset))
+                        break
+                    except Exception as e:
+                        print(f"Error: {e}", flush=True)
+                        time.sleep(0.5)
 
-            idx_list.append(idx)
+            result = {
+                "hyperparams": str(args),
+                "prompt": prev_results[i]["prompt"],
+                "completion": decoded_text,
+                "ground_truth": sample["final_answer"],
+                "generated_tokens": generated_tokens_list[i*args.num_samples:(i+1)*args.num_samples],
+                "avg_generated_tokens": sum(generated_tokens_list[i*args.num_samples:(i+1)*args.num_samples]) / args.num_samples,
+                "time": 0,
+                "idx": idx,
+                "n": args.num_samples,
+                "finish_generation": finish_generation,
+                "judge_info": judge_info,
+                "passat1": sum(passat1_list) / len(passat1_list),
+                "passat1_list": passat1_list
+            }
+            results.append(result)
 
-        # generate results
-        decoded_text_list = []
-        finish_generation_list = []
-        generated_tokens_list = []
-        idx = 0
-        while idx < len(prompt_list):
-            print(f"Number of GPUs available: {num_gpus}", flush=True)
+            # Incremental save after each sample
+            with open(results_file, "w") as f:
+                results_sorted = sorted(results, key=lambda x: x["idx"])
+                json.dump(results_sorted, f, indent=4)
+
+    # normal path: generate + evaluate per sample with checkpoint resume
+    else:
+        # Determine which samples still need processing
+        idx_list = [idx for idx in range(start_idx, min(end_idx, len(samples))) if idx not in completed_indices]
+
+        if not idx_list:
+            print("All samples already completed, skipping generation", flush=True)
+        else:
+            print(f"Processing {len(idx_list)} samples (skipping {len(completed_indices)} completed)", flush=True)
             llm = sgl.Engine(
                 model_path=model_name,
                 tp_size=num_gpus,
@@ -271,100 +325,104 @@ Test Cases:
                 cuda_graph_max_bs=args.cuda_graph_max_bs,
                 sampling_backend=args.sampling_backend
             )
-            outputs =  llm.generate(prompt_list[idx:idx+max_batch], sampling_params)
-            decoded_text_list.extend([o["text"] for o in outputs])
-            finish_generation_list.extend([o["meta_info"]["finish_reason"]["type"] == "stop" and not args.enable_soft_thinking for o in outputs])
 
-            generated_tokens_list.extend([o["meta_info"]["completion_tokens"] for o in outputs])
-            idx += max_batch
-            outputs = None
+            for sample_i, idx in enumerate(idx_list):
+                sample = samples[idx]
+
+                if dataset in ["aime2024", "aime2025", "math500", "gsm8k", "amc23"]:
+                    chat = [{"role": "user", "content": MATH_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
+                elif dataset == "gpqa_diamond":
+                    chat = [{"role": "user", "content": GPQA_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
+                elif dataset == "humaneval":
+                    chat = [{"role": "user", "content": CODE_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
+                elif dataset == "mbpp":
+                    chat = [{"role": "user", "content": MBPP_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"], TestCases="\n".join(sample["final_answer"]["test_list"]))}]
+                elif dataset == "livecodebench":
+                    chat = [{"role": "user", "content": get_lcb_prompt(question_content=sample["prompt"][0]["value"], starter_code=sample["final_answer"]["starter_code"])}]
+                else:
+                    raise ValueError("Invalid dataset name")
+
+                prompt = tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=False)
+
+                # Generate num_samples completions for this sample
+                decoded_text = []
+                finish_generation = []
+                generated_tokens = []
+                for s in range(args.num_samples):
+                    print(f"[generate] sample {sample_i + 1}/{len(idx_list)} (idx={idx}), run {s + 1}/{args.num_samples}", flush=True)
+                    o = llm.generate(prompt, sampling_params)
+                    decoded_text.append(o["text"])
+                    finish_generation.append(o["meta_info"]["finish_reason"]["type"] == "stop" and not args.enable_soft_thinking)
+                    generated_tokens.append(o["meta_info"]["completion_tokens"])
+
+                # Evaluate this sample
+                judge_info = []
+                passat1_list = []
+                for j in range(args.num_samples):
+                    for _ in range(5):
+                        try:
+                            if dataset in MATH_DATASETS:
+                                rule_judge_result = None
+                                rule_judge_result, extracted_answer = matheval.evaluator_map[dataset].rule_judge(decoded_text[j], sample["final_answer"], finish_generation[j])
+                                llm_judge_result = None
+                                if not rule_judge_result and args.use_llm_judge:
+                                    llm_judge_result = matheval.evaluator_map[dataset].llm_judge(decoded_text[j], sample["final_answer"], extracted_answer, finish_generation[j])
+                                finally_judge_result = rule_judge_result or llm_judge_result
+                                judge_info.append({
+                                    "rule_judge_result": rule_judge_result,
+                                    "llm_judge_result": llm_judge_result,
+                                    "finally_judge_result": finally_judge_result
+                                })
+                                passat1_list.append(1.0 if finally_judge_result else 0.0)
+
+                            elif dataset in CODE_DATASETS:
+                                k = 1
+                                if dataset == "humaneval":
+                                    passat1, single_judge_info = 0.0, None
+                                elif dataset == "mbpp":
+                                    passat1, single_judge_info = 0.0, None
+                                elif dataset == "livecodebench":
+                                    passat1, single_judge_info = 0.0, None
+                                passat1_list.append(passat1)
+                                judge_info.append(single_judge_info)
+
+                            else:
+                                raise ValueError("Unknown dataset: {}".format(dataset))
+                            break
+                        except Exception as e:
+                            print(f"Error: {e}", flush=True)
+                            time.sleep(0.5)
+
+                # Build result for this sample
+                result = {
+                    "hyperparams": str(args),
+                    "prompt": sample["prompt"][0]["value"],
+                    "completion": decoded_text,
+                    "ground_truth": sample["final_answer"],
+                    "generated_tokens": generated_tokens,
+                    "avg_generated_tokens": sum(generated_tokens) / args.num_samples,
+                    "time": 0,
+                    "idx": idx,
+                    "n": args.num_samples,
+                    "finish_generation": finish_generation,
+                    "judge_info": judge_info,
+                    "passat1": sum(passat1_list) / len(passat1_list),
+                    "passat1_list": passat1_list
+                }
+                results.append(result)
+
+                # Incremental save after each sample
+                with open(results_file, "w") as f:
+                    results_sorted = sorted(results, key=lambda x: x["idx"])
+                    json.dump(results_sorted, f, indent=4)
+                print(f"Checkpoint saved: {len(results)}/{len(completed_indices) + len(idx_list)} samples done", flush=True)
+
             llm.shutdown()
-
             torch.cuda.empty_cache()
 
-    # init evaluator for code datasets
-    if dataset in CODE_DATASETS:
-        mbppeval.init_evaluator()
-        humanevaleval.init_evaluator()
-
-    # evaluate results
-    for i,idx in enumerate(idx_list):
-        print(idx, flush=True)
-        sample = samples[idx]
-        judge_info = []
-        passat1_list = []
-        decoded_text = decoded_text_list[i*args.num_samples:(i+1)*args.num_samples]
-        finish_generation = finish_generation_list[i*args.num_samples:(i+1)*args.num_samples]
-
-        # evaluate each sample
-        for j in range(args.num_samples):
-            for _ in range(5):
-                try:
-                    if dataset in MATH_DATASETS:
-                        rule_judge_result = None
-                        rule_judge_result, extracted_answer = matheval.evaluator_map[dataset].rule_judge(decoded_text[j],sample["final_answer"], finish_generation[j])
-                        llm_judge_result = None
-                        if not rule_judge_result and args.use_llm_judge:
-                            llm_judge_result = matheval.evaluator_map[dataset].llm_judge(decoded_text[j],sample["final_answer"],extracted_answer, finish_generation[j])
-                        finally_judge_result = rule_judge_result or llm_judge_result
-                        judge_info.append({
-                            "rule_judge_result": rule_judge_result,
-                            "llm_judge_result": llm_judge_result,
-                            "finally_judge_result": finally_judge_result
-                        })
-                        passat1_list.append(1.0 if finally_judge_result else 0.0)
-                        # passat1 = sum(passat1_list)/len(passat1_list)
-
-                    elif dataset in CODE_DATASETS:
-                        k = 1
-                        if dataset=="humaneval":
-                            if reeval:
-                                passat1, single_judge_info = humanevaleval.evaluator_map[dataset].judge(sample["prompt"][0]["value"], decoded_text[j],  sample["final_answer"], k)
-                            else:
-                                passat1, single_judge_info = 0.0, None
-                        elif dataset=="mbpp":
-                            if reeval:
-                                passat1, single_judge_info = mbppeval.evaluator_map[dataset].judge(sample["prompt"][0]["value"], decoded_text[j],  sample["final_answer"], k)
-                            else:
-                                passat1, single_judge_info = 0.0, None
-                        elif dataset=="livecodebench":
-                            if reeval:
-                                passat1, single_judge_info = 0.0, None
-                            else:
-                                passat1, single_judge_info = 0.0, None
-
-                        passat1_list.append(passat1)
-                        judge_info.append(single_judge_info)
-                        # passat1 = sum(passat1_list)/len(passat1_list)
-
-                    else:
-                        raise ValueError("Unknown dataset: {}".format(dataset))
-
-                    break
-                except Exception as e:
-                    print(f"Error: {e}", flush=True)
-                    time.sleep(0.5)
-
-    # save result
-        result = {
-            "hyperparams": str(args),
-            "prompt": sample["prompt"][0]["value"],
-            "completion": decoded_text,
-            "ground_truth": sample["final_answer"],
-            "generated_tokens": generated_tokens_list[i*args.num_samples:(i+1)*args.num_samples],
-            "avg_generated_tokens": sum(generated_tokens_list[i*args.num_samples:(i+1)*args.num_samples])/args.num_samples,
-            "time": 0,
-            "idx": idx,
-            "n": args.num_samples,
-            "finish_generation": finish_generation_list[i*args.num_samples:(i+1)*args.num_samples],
-            "judge_info": judge_info,
-            "passat1": sum(passat1_list)/len(passat1_list),
-            "passat1_list": passat1_list
-        }
-        results.append(result)
-
+    # Final sorted save
+    results.sort(key=lambda x: x["idx"])
     with open(results_file, "w") as f:
-        results.sort(key=lambda x: x["idx"])
         json.dump(results, f, indent=4)
     
     # convert livecodebench format
@@ -450,6 +508,11 @@ Test Cases:
         )
     print(results_statistics, flush=True)
     
+    # Force exit to avoid hanging during Python cleanup.
+    # SGLang Engine leaves dangling asyncio tasks (handle_loop) with pending
+    # ZMQ recv operations. During normal interpreter shutdown, ZMQ context
+    # teardown blocks waiting for these sockets to close, causing a deadlock.
+    os._exit(0)
 
 if __name__ == "__main__":
     main()
