@@ -1,10 +1,3 @@
-{
-    "total_num": 1,
-    "pass@1": 1.0,
-    "avg_token_length-all": 22929.0,
-    "avg_token_length-correct": 22929.0,
-    "time_taken/h": 0.16584769209225972,
-    "all_idx": {
-        "25": 1.0
-    }
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:8188cf9db860ab34bfdbab94b5f3deb33e0dd75a249e19623a6171f41ae12d7d
+size 202
