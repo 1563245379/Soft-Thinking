@@ -63,7 +63,7 @@ def main():
     parser.add_argument('--deployment_name', type=str, default=None, help='Azure OpenAI deployment name when using Azure judge endpoints')
     parser.add_argument('--api_version', type=str, default=None, help='Azure OpenAI API version when using Azure judge endpoints')
     parser.add_argument('--api_key', type=str, default=None, help='Judge API key. Falls back to DEEPSEEK_API_KEY or OPENAI_API_KEY')
-    parser.add_argument('--judge_model_name', type=str, default="deepseek-chat", help='Judge LLM model name for evaluation')
+    parser.add_argument('--judge_model_name', type=str, default="deepseek-reasoner", help='Judge LLM model name for evaluation')
     parser.add_argument('--push_results_to_hf', action='store_true', help='Enable push to huggingface')
     parser.add_argument('--hf_token', type=str, default=None, help='')
     parser.add_argument('--hf_repo_id', type=str, default=None, help='')
