@@ -11,6 +11,7 @@ import asyncio
 import matheval
 import humanevaleval
 import mbppeval
+import guidedbencheval
 from huggingface_hub import HfApi
 import torch
 import time
@@ -18,11 +19,12 @@ import convert_livecodebench
 
 MATH_DATASETS = ["math500","aime2024","aime2025","gpqa_diamond","gsm8k","amc23"]
 CODE_DATASETS = ["humaneval","mbpp","livecodebench"]
+SAFETY_DATASETS = ["guidedbench"]
 
 def main():
     # parse arguments
     parser = argparse.ArgumentParser(description='Process some parameters for text generation.')
-    parser.add_argument('--dataset', type=str, choices=["math500", "aime2024", "aime2025", "gpqa_diamond", "gsm8k", "amc23", "humaneval", "mbpp", "livecodebench"], help='Name of dataset')
+    parser.add_argument('--dataset', type=str, choices=["math500", "aime2024", "aime2025", "gpqa_diamond", "gsm8k", "amc23", "humaneval", "mbpp", "livecodebench", "guidedbench"], help='Name of dataset')
     parser.add_argument('--sampling_backend', type=str, choices=["pytorch", "flashinfer"], default="flashinfer", help='Sampling backend')
     parser.add_argument('--model_name', type=str, required=True, default="Qwen/QwQ-32B", help='Model name or path')
     parser.add_argument('--num_gpus', type=int, default=8, help='GPU number (tensor parallel size, tp_size)')
@@ -94,7 +96,7 @@ def main():
 
 
     print(f"Arguments: {args}", flush=True)
-    if dataset in MATH_DATASETS:
+    if dataset in MATH_DATASETS or dataset in SAFETY_DATASETS:
         matheval.set_client(args.api_base, args.deployment_name, args.api_version, args.api_key, args.judge_model_name)
 
     # load dataset
@@ -125,6 +127,8 @@ def main():
     elif dataset == "livecodebench":
         with open("./datasets/livecodebench.json") as f:
             samples = json.load(f)
+    elif dataset == "guidedbench":
+        samples = guidedbencheval.load_guidedbench_csv("./datasets/GuidedBench.csv")
     else:
         raise ValueError("Invalid dataset name")
 
@@ -162,6 +166,8 @@ Test Cases:
 {TestCases}
 ```
 """.strip()
+    SAFETY_QUERY_TEMPLATE = "{Question}"
+
     def get_lcb_prompt(question_content, starter_code):
         prompt = "You will be given a question (problem specification) and will generate a correct Python program that matches the specification and passes all tests.\n\n"
         prompt += f"Question: {question_content}\n\n"
@@ -270,6 +276,23 @@ Test Cases:
                             passat1_list.append(passat1)
                             judge_info.append(single_judge_info)
 
+                        elif dataset in SAFETY_DATASETS:
+                            safety_eval = guidedbencheval.evaluator_map[dataset]
+                            rule_judge_result, rule_reason = safety_eval.rule_judge(decoded_text[j], sample["final_answer"], finish_generation[j])
+                            llm_judge_result = None
+                            if rule_judge_result is None and args.use_llm_judge:
+                                llm_judge_result = safety_eval.llm_judge(decoded_text[j], sample["final_answer"], finish_generation[j])
+                            finally_judge_result = rule_judge_result if rule_judge_result is not None else llm_judge_result
+                            if finally_judge_result is None:
+                                finally_judge_result = False
+                            judge_info.append({
+                                "rule_judge_result": rule_judge_result,
+                                "rule_reason": rule_reason,
+                                "llm_judge_result": llm_judge_result,
+                                "finally_judge_result": finally_judge_result
+                            })
+                            passat1_list.append(1.0 if finally_judge_result else 0.0)
+
                         else:
                             raise ValueError("Unknown dataset: {}".format(dataset))
                         break
@@ -339,6 +362,8 @@ Test Cases:
                     chat = [{"role": "user", "content": MBPP_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"], TestCases="\n".join(sample["final_answer"]["test_list"]))}]
                 elif dataset == "livecodebench":
                     chat = [{"role": "user", "content": get_lcb_prompt(question_content=sample["prompt"][0]["value"], starter_code=sample["final_answer"]["starter_code"])}]
+                elif dataset == "guidedbench":
+                    chat = [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": SAFETY_QUERY_TEMPLATE.format(Question=sample["prompt"][0]["value"])}]
                 else:
                     raise ValueError("Invalid dataset name")
 
@@ -385,6 +410,23 @@ Test Cases:
                                     passat1, single_judge_info = 0.0, None
                                 passat1_list.append(passat1)
                                 judge_info.append(single_judge_info)
+
+                            elif dataset in SAFETY_DATASETS:
+                                safety_eval = guidedbencheval.evaluator_map[dataset]
+                                rule_judge_result, rule_reason = safety_eval.rule_judge(decoded_text[j], sample["final_answer"], finish_generation[j])
+                                llm_judge_result = None
+                                if rule_judge_result is None and args.use_llm_judge:
+                                    llm_judge_result = safety_eval.llm_judge(decoded_text[j], sample["final_answer"], finish_generation[j])
+                                finally_judge_result = rule_judge_result if rule_judge_result is not None else llm_judge_result
+                                if finally_judge_result is None:
+                                    finally_judge_result = False
+                                judge_info.append({
+                                    "rule_judge_result": rule_judge_result,
+                                    "rule_reason": rule_reason,
+                                    "llm_judge_result": llm_judge_result,
+                                    "finally_judge_result": finally_judge_result
+                                })
+                                passat1_list.append(1.0 if finally_judge_result else 0.0)
 
                             else:
                                 raise ValueError("Unknown dataset: {}".format(dataset))

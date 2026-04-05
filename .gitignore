@@ -368,3 +368,7 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 logs
 log
 outputs
+
+# Keep benchmark datasets versioned, even when global file patterns match.
+!datasets/
+!datasets/**
