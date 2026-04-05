@@ -1,0 +1,10 @@
+{
+    "total_num": 1,
+    "pass@1": 0.0,
+    "avg_token_length-all": 1185.0,
+    "avg_token_length-correct": 0,
+    "time_taken/h": 0.017302922871377732,
+    "all_idx": {
+        "180": 0.0
+    }
+}

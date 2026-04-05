@@ -12,4 +12,4 @@ cd ..
 
 pip install --upgrade torchaudio
 
-python ./models/download.py --model_name Qwen/Qwen3-8B #"Qwen/QwQ-32B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B" "Qwen/Qwen3-32B"
+python ./models/download.py --model_name "Qwen/QwQ-32B" #"Qwen/QwQ-32B" "Qwen/Qwen3-8B" "Qwen/Qwen3-14B" "Qwen/Qwen3-32B"
